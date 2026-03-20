@@ -316,8 +316,10 @@ class Dataset:
         )
 
     def get_pretrained_embedding(self):
-        ent_ptlm_embed = np.zeros((self.entity.cnt, self.config.ptlm_embedding_dim))
-        rel_ptlm_embed = np.zeros((self.relation.cnt, self.config.ptlm_embedding_dim))
+        # Không hardcode ptlm_embedding_dim, vì `sentence-transformers` có thể trả về
+        # các chiều embedding khác nhau theo model (vd: all-MiniLM-L6-v2 = 384).
+        ent_ptlm_embed = None
+        rel_ptlm_embed = None
 
         embed_file_name = self.config.ptlm_model.replace("/", "_")
 
@@ -327,10 +329,8 @@ class Dataset:
         rel_embed_file = (
             "./" + embed_file_name + "-" + self.config.dataset_name + "-relation"
         )
-        if not os.path.exists(ent_embed_file + ".npy") or not os.path.exists(
-            rel_embed_file + ".npy"
-        ):
-            model = SentenceTransformer(self.config.ptlm_model)
+        model = SentenceTransformer(self.config.ptlm_model)
+
         if os.path.exists(ent_embed_file + ".npy"):
             logging.info(
                 "entity embedding file {} found, start loading ...".format(
@@ -343,7 +343,7 @@ class Dataset:
             logging.info("start generating entity embeddings ...")
             ss = [self.entity[i] for i in range(self.entity.cnt)]
             emb = model.encode(ss)
-            ent_ptlm_embed[:, :] = emb
+            ent_ptlm_embed = emb
             logging.info("entity embedding generated, start saving ...")
             np.save(ent_embed_file, ent_ptlm_embed)
             logging.info("saved!")
@@ -360,10 +360,27 @@ class Dataset:
             logging.info("start generating relation embeddings ...")
             ss = [self.relation[i] for i in range(self.relation.cnt)]
             emb = model.encode(ss)
-            rel_ptlm_embed[:, :] = emb
+            rel_ptlm_embed = emb
             logging.info("relation embedding generated, start saving ...")
             np.save(rel_embed_file, rel_ptlm_embed)
             logging.info("saved!")
+
+        # Đồng bộ config để Encoder tạo Linear đúng kích thước.
+        if ent_ptlm_embed is not None:
+            self.config.ptlm_embedding_dim = int(ent_ptlm_embed.shape[1])
+
+        # Sanity check: relation embedding nếu tồn tại phải cùng chiều.
+        if rel_ptlm_embed is not None and int(rel_ptlm_embed.shape[1]) != int(
+            self.config.ptlm_embedding_dim
+        ):
+            logging.warning(
+                "PTLM embedding dim mismatch: ent=%s, rel=%s. Regenerate relation embeddings.",
+                str(ent_ptlm_embed.shape[1]),
+                str(rel_ptlm_embed.shape[1]),
+            )
+            ss = [self.relation[i] for i in range(self.relation.cnt)]
+            rel_ptlm_embed = model.encode(ss)
+            np.save(rel_embed_file, rel_ptlm_embed)
 
         logging.info("generating PTLM embeddings DONE!!!")
         return ent_ptlm_embed, rel_ptlm_embed

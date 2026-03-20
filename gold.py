@@ -6,7 +6,6 @@ import random
 import numpy as np
 import torch
 import torch.nn as nn
-from sklearn import metrics
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -20,6 +19,44 @@ LOG_FORMAT = "[%(asctime)s][%(levelname)s] %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, datefmt=DATE_FORMAT)
+
+def _roc_auc_score_binary(y_true, y_score):
+    """
+    Compute ROC-AUC for binary labels using NumPy only (no sklearn/scipy).
+    Higher y_score means more likely label==1.
+    """
+    y_true = np.asarray(y_true, dtype=np.int64)
+    y_score = np.asarray(y_score, dtype=np.float64)
+    if y_true.shape[0] != y_score.shape[0] or y_true.ndim != 1:
+        raise ValueError("y_true/y_score must be 1D arrays with same length")
+
+    n_pos = int((y_true == 1).sum())
+    n_neg = int((y_true == 0).sum())
+    if n_pos == 0 or n_neg == 0:
+        return float("nan")
+
+    # Rank y_score with average ranks for ties (1-based ranks, like Mann–Whitney).
+    order = np.argsort(y_score, kind="mergesort")
+    ranks = np.empty_like(order, dtype=np.float64)
+    sorted_scores = y_score[order]
+
+    start = 0
+    n = sorted_scores.shape[0]
+    while start < n:
+        end = start + 1
+        while end < n and sorted_scores[end] == sorted_scores[start]:
+            end += 1
+        # Average rank for the tie group: positions are (start..end-1) -> ranks (start+1..end)
+        rank_lo = start + 1
+        rank_hi = end
+        avg_rank = (rank_lo + rank_hi) / 2.0
+        ranks[order[start:end]] = avg_rank
+        start = end
+
+    sum_ranks_pos = float(ranks[y_true == 1].sum())
+    # AUC = (sum_ranks_pos - n_pos*(n_pos+1)/2) / (n_pos*n_neg)
+    auc = (sum_ranks_pos - (n_pos * (n_pos + 1)) / 2.0) / (n_pos * n_neg)
+    return float(auc)
 
 
 def _run_file_prefix(config):
@@ -286,10 +323,7 @@ def run_train(config, pretrained_entity_embeddings, pretrained_relation_embeddin
             for j in all_triple:
                 tloss.append(j[2])
                 tlabel.append(j[1])
-            try:
-                auc = metrics.roc_auc_score(tlabel, tloss)
-            except ValueError:
-                auc = float("nan")
+            auc = _roc_auc_score_binary(tlabel, tloss)
             if config.nr_error > 0:
                 crr = 0
                 for j in range(min(config.nr_error, len(all_triple))):
@@ -424,10 +458,7 @@ def run_test(
                         )
 
         all_loss = np.array(all_loss)
-        try:
-            auc = metrics.roc_auc_score(all_label, all_loss)
-        except ValueError:
-            auc = float("nan")
+        auc = _roc_auc_score_binary(all_label, all_loss)
 
         idx = list(range(len(all_loss)))
         idx.sort(key=lambda x: -all_loss[x])
