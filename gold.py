@@ -103,8 +103,11 @@ def run_train(config, pretrained_entity_embeddings, pretrained_relation_embeddin
     )
 
     batch_size = config.batch_size
-    if torch.cuda.device_count() > 1:
-        logging.info("try to use {} GPUs".format(torch.cuda.device_count()))
+    # DataParallel đôi khi làm traceback khó đọc và có thể kích hoạt lỗi do scatter/gather.
+    # Mặc định tắt; bật bằng biến môi trường nếu cần.
+    use_dataparallel = os.environ.get("USE_DATAPARALLEL", "0") == "1"
+    if use_dataparallel and torch.cuda.device_count() > 1:
+        logging.info("try to use {} GPUs (DataParallel)".format(torch.cuda.device_count()))
         model = nn.DataParallel(model)
     model.to(config.device)
     try:
