@@ -2,6 +2,7 @@ import argparse
 import logging
 import os
 import random
+import math
 
 import numpy as np
 import torch
@@ -126,6 +127,10 @@ def run_train(config, pretrained_entity_embeddings, pretrained_relation_embeddin
     all_sum = 0
     model_saved_path = _run_file_prefix(config) + ".ckpt"
     all_acc = 0
+    best_auc = -float("inf")
+    best_acc = -float("inf")
+    best_epoch = -1
+    best_ckpt_path = _run_file_prefix(config) + "_best.ckpt"
     for epoch in range(config.num_epochs):
         with tqdm(total=len(data_loader)) as TD:
             for idx, sample in tqdm(enumerate(data_loader)):
@@ -339,7 +344,33 @@ def run_train(config, pretrained_entity_embeddings, pretrained_relation_embeddin
                     epoch + 1, acc, auc
                 )
             )
+            auc_ok = not math.isnan(auc)
+            acc_ok = not math.isnan(acc)
+            if auc_ok and (
+                (auc > best_auc)
+                or (auc == best_auc and acc_ok and acc > best_acc)
+            ):
+                best_auc = auc
+                best_acc = acc if acc_ok else best_acc
+                best_epoch = epoch + 1
+                torch.save(_state_dict_for_save(model), best_ckpt_path)
+                logging.info(
+                    "new best model saved: epoch=%d, AUC=%.5f, Acc=%.5f -> %s",
+                    best_epoch,
+                    best_auc,
+                    best_acc,
+                    best_ckpt_path,
+                )
         model.train()
+
+    if best_epoch > 0:
+        best_meta_path = _run_file_prefix(config) + "_best.txt"
+        with open(best_meta_path, "w", encoding="utf-8") as f:
+            f.write("best_epoch=%d\n" % best_epoch)
+            f.write("best_auc=%.6f\n" % best_auc)
+            f.write("best_acc=%.6f\n" % best_acc)
+            f.write("best_ckpt=%s\n" % best_ckpt_path)
+        logging.info("best checkpoint summary saved: %s", best_meta_path)
 
 
 def run_test(
@@ -359,7 +390,9 @@ def run_test(
     )
     model_test.to(config.device)
 
-    model_saved_path = _run_file_prefix(config) + str(config.num_epochs) + ".ckpt"
+    best_ckpt_path = _run_file_prefix(config) + "_best.ckpt"
+    last_ckpt_path = _run_file_prefix(config) + str(config.num_epochs) + ".ckpt"
+    model_saved_path = best_ckpt_path if os.path.isfile(best_ckpt_path) else last_ckpt_path
     logging.info("start loading model[{}] ...".format(model_saved_path))
     _load_encoder_weights(model_test, model_saved_path, config.device)
     logging.info("model loaded!")
